@@ -2,6 +2,8 @@
 
 A mod for the Code tab of the Claude desktop app. It draws a pixel-art meadow behind the conversation where Claude's little crab plays whack-a-mole: every kind of tool has a hole, a mole pops up when a tool call starts, the crab taps it while the call runs, and brings the mallet down hard when it ends.
 
+![The demo game: moles come up for tool calls and the crab whacks them](docs/demo.gif)
+
 给 Claude 桌面端 Code 标签页用的一个 mod：对话后面是一片像素风草地，Claude 小螃蟹在上面打地鼠。每类工具一个地洞，工具调用开始时地鼠冒头，运行期间小螃蟹一下一下地敲，结束时一锤砸下去。中文回复用 `/tool-flow lang zh` 打开。
 
 ## Reading the game
