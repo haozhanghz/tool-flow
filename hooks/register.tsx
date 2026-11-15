@@ -555,8 +555,8 @@ export const register: Register = on => {
 
       return {
         text: say(
-          'Demo time: 13 seconds, every hole gets a whack.',
-          '演示开始：约 13 秒，Claude 会把七个洞各打一遍。',
+          'Demo time: 14 seconds, every hole gets a whack.',
+          '演示开始：约 14 秒，Claude 会把七个洞各打一遍。',
         ),
       }
     }
