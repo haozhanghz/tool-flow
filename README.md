@@ -18,7 +18,7 @@ There are no words in the picture. A kind of tool is told by its mole's costume 
 | MCP tools | the prongs of a plug | sparks |
 | Everything else | a propeller cap | dust, a nut and a bolt |
 
-A failed call is a miss: the mole ducks, then sticks its tongue out. Calls that finish together are whacked one after another. Three hits within four seconds bring confetti.
+A failed call is a miss: the mole ducks, then sticks its tongue out. When calls run in several holes at once, the crab goes round them, two taps each, and calls that finish together are whacked one after another. Three hits within four seconds bring confetti.
 
 ## Requirements
 
@@ -42,7 +42,7 @@ If your sessions run on a remote machine over SSH, install it in that machine's 
 | Command | What it does |
 | :- | :- |
 | `/tool-flow night`, `/tool-flow day` | The night meadow or the day meadow (night by default) |
-| `/tool-flow demo` | Plays a 13-second game |
+| `/tool-flow demo` | Plays a 14-second game |
 | `/tool-flow glass <blur> <opacity>` | The veil over the conversation; smaller numbers show the picture more clearly, for example `glass 0 0.3` |
 | `/tool-flow tint <#rrggbb>`, `/tool-flow tint off` | The panels' color, or back to the app's own |
 | `/tool-flow off`, `/tool-flow on` | Off, or on again |

@@ -241,7 +241,7 @@ function ended(was: Flow, id: string, endedAt: number, hasFailed: boolean): Flow
   return {
     ...was,
     calls: was.calls.map(one => (one.id === id ? done : one)),
-    claude: moved(was, call.lane, hitAt(done) - 220),
+    claude: moved(was, call.lane, endedAt),
   }
 }
 
@@ -264,7 +264,7 @@ const DEMO: [string, number, number, boolean][] = [
   ['Bash', 10_600, 900, false],
   ['Edit', 11_800, 500, false],
 ]
-const DEMO_MS = 12_500
+const DEMO_MS = 14_000
 const DEMO_LEAD_MS = 1200
 
 // The made-up calls as far as they have got at `now`, on top of the real
@@ -345,6 +345,22 @@ function settleLater($: EngineInterface, at: number): void {
   })
 }
 
+const isWindow = (surface: string) => surface === 'desktop' || surface === 'mobile'
+
+// Plays the demo once for each version of the picture, the first time a
+// window that shows it is there: what the mod does is plain at once to
+// someone who has just installed it.
+async function greet($: EngineInterface): Promise<void> {
+  try {
+    if (await read($, isOff)) return
+    if ((await $.store.get('demo')) === VERSION) return
+    await $.store.set('demo', VERSION)
+    await play($)
+  } catch {
+    // No demo is no loss: /tool-flow demo plays it on request.
+  }
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -355,19 +371,24 @@ export const register: Register = on => {
     // Neither a reload nor --resume keeps a backdrop, so set it here.
     if (!(await read($, isOff))) {
       await show($ as unknown as AnyEngine, await read($, glass), await read($, mode))
-      // A new version of the picture plays its demo once, where a window shows it.
+      // After a reload the app is attached already. In a new session it
+      // attaches later, and `session.attach` below greets it.
       try {
         const surfaces = await $.session.surfaces()
-        const isShown = surfaces.some(one => one === 'desktop' || one === 'mobile')
 
-        if (isShown && (await $.store.get('demo')) !== VERSION) {
-          await $.store.set('demo', VERSION)
-          await play($)
-        }
+        if (surfaces.some(isWindow)) await greet($)
       } catch {
         // No demo is no loss: /tool-flow demo plays it on request.
       }
     }
+
+    return next(e)
+  })
+
+  // The app joins a new session a moment after it starts, with the first
+  // message, so someone who has just installed the mod is greeted here.
+  on('session.attach', async ($, e, next) => {
+    if (isWindow(e.surface)) await greet($)
 
     return next(e)
   })

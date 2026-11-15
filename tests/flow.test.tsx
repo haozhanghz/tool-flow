@@ -66,14 +66,18 @@ test('a call pops its mole, and its end brings the mallet down', async ($, on) =
   await reading
   const hit = await drawn()
 
-  // The call has ended. The mallet lands 220 ms from now, so its swing, which
+  // The call has ended. The mallet lands 600 ms from now, so its swing, which
   // starts 166 ms before, is still to come and can be seen. With it come a
   // flash, a coin and sheets of paper, and then the mole goes down.
-  expect(hit).toContain('swr .46s ease-in 54ms')
-  expect(hit).toContain('animation:fl .28s ease-out 220ms both')
-  expect(hit).toContain(`${PAPER} 220ms both`)
-  expect(hit).toContain(`${COIN} 220ms both`)
-  expect(hit).toContain('dn .3s ease-in 520ms forwards')
+  expect(hit).toContain('swr .46s ease-in 434ms')
+  expect(hit).toContain('animation:fl .28s ease-out 600ms both')
+  expect(hit).toContain(`${PAPER} 600ms both`)
+  expect(hit).toContain(`${COIN} 600ms both`)
+  expect(hit).toContain('dn .3s ease-in 900ms forwards')
+  // Drawn again a moment later, the whack has not moved: it lands when it
+  // was first said to.
+  await clock.advance(100)
+  expect(await drawn()).toContain('swr .46s ease-in 334ms')
   expect(hit.includes('animation:tap ')).toBe(false)
   expect(hit.includes('class="pg"')).toBe(false)
   // Reading throws off paper, and nothing that belongs to another kind of tool.
@@ -81,7 +85,7 @@ test('a call pops its mole, and its end brings the mallet down', async ($, on) =
   expect(hit.includes(RIPPLE)).toBe(false)
 
   // Later the picture is drawn once more, at rest, without anyone asking.
-  await clock.advance(3200)
+  await clock.advance(3100)
   const rest = await drawn()
 
   expect(rest.includes(COIN)).toBe(false)
@@ -107,21 +111,22 @@ test('each kind of tool is whacked with an effect of its own', async ($, on) => 
   }
   const bash = await whacked({ tool: 'Bash', command: 'ls' })
 
-  // It took no time, so the mallet waits 420 ms for the mole to be up.
-  expect(bash).toContain(`${BOLT} 420ms both`)
-  expect(bash).toContain('swr .46s ease-in 254ms')
+  // The mallet lands 600 ms after the picture is first drawn with the call
+  // ended, however short the call.
+  expect(bash).toContain(`${BOLT} 600ms both`)
+  expect(bash).toContain('swr .46s ease-in 434ms')
   expect(bash.includes(PAPER)).toBe(false)
 
   const web = await whacked({ tool: 'WebFetch', url: 'https://example.com', prompt: 'x' })
 
   // Three ripples, one after another.
-  expect(web).toContain(`${RIPPLE} 420ms both`)
-  expect(web).toContain(`${RIPPLE} 720ms both`)
+  expect(web).toContain(`${RIPPLE} 600ms both`)
+  expect(web).toContain(`${RIPPLE} 900ms both`)
   expect(web.includes(BOLT)).toBe(false)
 
   const agent = await whacked({ tool: 'Agent', description: 'x', prompt: 'y' })
 
-  expect(agent).toContain(`${STARS} 420ms both`)
+  expect(agent).toContain(`${STARS} 600ms both`)
   expect(agent.includes(RIPPLE)).toBe(false)
 })
 
@@ -135,11 +140,11 @@ test('a failed call is a miss: the mole ducks, taunts, and no coin is given', as
 
   expect(source.includes(COIN)).toBe(false)
   // Down 90 ms before the mallet lands, then up again with its tongue out.
-  expect(source).toContain('dn .2s ease-in 330ms forwards')
-  expect(source).toContain('up .2s ease-out 680ms forwards')
-  expect(source).toContain('animation:tg .85s linear 720ms')
+  expect(source).toContain('dn .2s ease-in 510ms forwards')
+  expect(source).toContain('up .2s ease-out 860ms forwards')
+  expect(source).toContain('animation:tg .85s linear 900ms')
   // And Claude is left with a drop of sweat.
-  expect(source).toContain('animation:dr .7s ease-in 540ms both')
+  expect(source).toContain('animation:dr .7s ease-in 720ms both')
   await ui.unmount()
 })
 
@@ -398,12 +403,97 @@ test('calls that end together in one hole are whacked one after another', async 
   const ui = await $.ui.mount({ ...BACKDROP, surface: 'desktop' })
   const source = String((await ui.find({ type: 'Svg' }))?.props.source)
 
-  // Three whacks, 200 ms apart, each with its own swing and its own coin.
-  for (const at of [220, 420, 620]) {
+  // Three whacks, 220 ms apart, each with its own swing and its own coin.
+  for (const at of [600, 820, 1040]) {
     expect(source).toContain(`swr .46s ease-in ${at - 166}ms`)
     expect(source).toContain(`${COIN} ${at}ms both`)
   }
   // The mole stays up until the last one has landed.
-  expect(source).toContain('dn .3s ease-in 920ms forwards')
+  expect(source).toContain('dn .3s ease-in 1340ms forwards')
   await ui.unmount()
+})
+
+test('someone new is shown the demo once, when the app joins the session', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+
+  on('theme.set', () => ({ value: { isDrawn: true, requestId: 'backdrop' } }))
+  mock.store(on)
+  on('session.attach', () => ({ clientId: 'desktop:default' }))
+  const drawn = async () => {
+    const ui = await $.ui.mount({ ...BACKDROP, surface: 'desktop' })
+    const source = String((await ui.find({ type: 'Svg' }))?.props.source)
+
+    await ui.unmount()
+
+    return source
+  }
+
+  // A terminal draws no backdrop, so it is not greeted.
+  await $.session.attach({ surface: 'terminal', clientId: 'terminal:default' })
+  await clock.advance(1200 + 300 + 20)
+  expect((await drawn()).includes('animation:up ')).toBe(false)
+  // The app joins: the demo starts by itself.
+  await $.session.attach({ surface: 'desktop', clientId: 'desktop:default' })
+  await clock.advance(1200 + 300 + 20)
+  expect(await drawn()).toContain('animation:up ')
+  await clock.advance(30_000)
+  expect((await drawn()).includes('animation:up ')).toBe(false)
+  // It joins again, as it does in every later session: no second demo.
+  await $.session.attach({ surface: 'desktop', clientId: 'desktop:default' })
+  await clock.advance(1200 + 300 + 20)
+  expect((await drawn()).includes('animation:up ')).toBe(false)
+})
+
+test('with calls running in two holes, Claude goes round them and whacks each as it ends', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+
+  on('tool.call', async ($, e) => {
+    await clock.sleep((e as { tool: string }).tool === 'Bash' ? 8000 : 3000)
+
+    return { result: {} }
+  })
+  const drawn = async () => {
+    const ui = await $.ui.mount({ ...BACKDROP, surface: 'desktop' })
+    const source = String((await ui.find({ type: 'Svg' }))?.props.source)
+
+    await ui.unmount()
+
+    return source
+  }
+  const slow = $.tool.call({ tool: 'Bash', command: 'sleep 8' })
+  const fetched = $.tool.call({ tool: 'WebFetch', url: 'https://example.com', prompt: 'x' })
+
+  await clock.settle()
+  const both = await drawn()
+
+  // Two seconds at each hole in turn, four seconds the round: the command's
+  // hole has the first turn and the fetch's the second, and each mole
+  // flinches only during its own.
+  expect(both).toContain('@keyframes cy2{')
+  expect(both).toContain('animation:cy2 4000ms linear -0ms infinite')
+  expect(both).toContain('animation:cy2 4000ms linear -2000ms infinite')
+  expect(both).toContain('animation:fq2 4000ms linear -0ms infinite')
+  expect(both).toContain('animation:fq2 4000ms linear -2000ms infinite')
+
+  await clock.advance(3000)
+  await fetched
+  const one = await drawn()
+
+  // The fetch has ended: Claude hops to it 300 ms before the mallet lands,
+  // leaves 300 ms after, and goes back to tap the command still running.
+  expect(one).toContain('animation:in .18s ease-out 300ms both,out .14s ease-in 900ms forwards')
+  expect(one).toContain('swr .46s ease-in 434ms')
+  expect(one).toContain(`${RIPPLE} 600ms both`)
+  expect(one).toContain('animation:in .18s ease-out 940ms both')
+  expect(one.includes('animation:cy2 ')).toBe(false)
+
+  await clock.advance(5000)
+  await slow
+  const none = await drawn()
+
+  // The command has ended with Claude beside it: no hop, only the swing.
+  expect(none).toContain('swr .46s ease-in 434ms')
+  expect(none).toContain(`${BOLT} 600ms both`)
+  expect(none.includes('animation:in .18s')).toBe(false)
+  expect(none.includes('animation:tap ')).toBe(false)
 })

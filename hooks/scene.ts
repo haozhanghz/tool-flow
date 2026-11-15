@@ -35,13 +35,25 @@ export const HOME: Lane = 'web'
 // The least time a mole is up before the mallet lands, so the quickest call
 // still shows a pop and then a whack.
 const POP_MS = 420
-// How long after a call ends the mallet lands. The picture is only drawn
-// again when the call ends, so a whack timed to that instant would begin
-// with the mallet already down, and show for a frame or two. This leaves
-// room for the swing to be seen.
-const HIT_LAG_MS = 220
-// Calls that end together in one hole are whacked one after another.
-const HIT_GAP_MS = 200
+// How long after a call ends the mallet lands, and at the least how long
+// after the picture is first drawn with the call ended. The app paints a new
+// picture about a quarter of a second after the call's end, so a whack timed
+// any closer began with the mallet already down and was never seen. This
+// leaves time for Claude to hop over and swing.
+const HIT_LAG_MS = 600
+// Calls that end together are whacked one after another: this far apart in
+// one hole, and this far when Claude has to hop to another.
+const HIT_GAP_MS = 220
+const HOP_GAP_MS = 660
+// However many end together, the last is whacked within this long.
+const BACKLOG_MS = 3000
+// Claude lands beside a mole this long before the mallet does, and stays
+// this long after.
+const ARRIVE_MS = 300
+const LEAVE_MS = 300
+// With calls running in several holes, Claude spends this long at each in
+// turn: two taps.
+const SLOT_MS = 2000
 // While a call runs, Claude taps its mole once in this long.
 const TAP_MS = 1000
 // How long after a whack what it threw off is still part of the picture.
@@ -717,6 +729,7 @@ const KEYFRAMES =
   // ends with the mallet on the shoulder or raised again.
   '@keyframes in{0%{transform:translateY(-36px);opacity:0}70%{transform:translateY(2px);opacity:1}100%{transform:translateY(0);opacity:1}}' +
   '@keyframes out{0%{transform:translateY(0);opacity:1}100%{transform:translateY(-36px);opacity:0}}' +
+  '@keyframes on{to{opacity:1}}' +
   // The swing: down in the first third, held on the mole, then back.
   '@keyframes swr{0%{transform:rotate(-55deg)}36%,62%{transform:rotate(82deg)}100%{transform:rotate(-25deg)}}' +
   '@keyframes sww{0%{transform:rotate(-55deg)}36%,62%{transform:rotate(82deg)}100%{transform:rotate(-55deg)}}' +
@@ -977,7 +990,7 @@ function burst(lane: Lane, at: number): string {
 
 // ---- One hole ------------------------------------------------------------------
 
-// When the mallet lands on a finished call: a moment after it ends, and never
+// When the mallet is due on a finished call: a while after it ends, and never
 // before its mole has had time to come up.
 export function hitAt(call: Call): number {
   return Math.max(
@@ -986,36 +999,127 @@ export function hitAt(call: Call): number {
   )
 }
 
-function hole(index: number, state: Flow, now: number): string {
+// A whack: a finished call and the moment the mallet lands on it.
+type Hit = { call: Call; at: number }
+// Claude at one hole for one or more whacks.
+type Visit = { lane: Lane; hits: Hit[]; from: number; to: number }
+// Who is where: every whack, Claude's visits still to come or under way, and
+// the holes with a call running.
+type Stage = { hits: Hit[]; visits: Visit[]; busy: Lane[] }
+
+// The moment each whack lands, settled the first time the picture is drawn
+// with its call ended and kept from then on, so that drawing again does not
+// move a whack that is already under way.
+const landings = new Map<string, number>()
+
+function stageOf(state: Flow, now: number): Stage {
+  for (const [key, at] of landings) {
+    if (Math.abs(at - now) > 60_000) landings.delete(key)
+  }
+  const ended = state.calls
+    .filter(call => call.endedAt !== undefined)
+    .sort((a, b) => hitAt(a) - hitAt(b))
+  let previous: Hit | undefined
+  const hits: Hit[] = []
+
+  for (const call of ended) {
+    const key = `${call.id}:${call.startedAt}:${call.endedAt}`
+    let at = landings.get(key)
+
+    if (at === undefined) {
+      if (now - (call.endedAt ?? now) > BACKLOG_MS) {
+        // Long over before anyone looked: nothing to play.
+        at = hitAt(call)
+      } else {
+        const after =
+          previous === undefined
+            ? -Infinity
+            : previous.at +
+              (previous.call.lane === call.lane ? HIT_GAP_MS : HOP_GAP_MS)
+
+        at = Math.max(
+          hitAt(call),
+          now + HIT_LAG_MS,
+          Math.min(after, now + BACKLOG_MS),
+        )
+      }
+      landings.set(key, at)
+    }
+    previous = { call, at }
+    hits.push(previous)
+  }
+  hits.sort((a, b) => a.at - b.at)
+  const visits: Visit[] = []
+
+  for (const hit of hits) {
+    if (hit.at + LEAVE_MS <= now) continue
+    const last = visits[visits.length - 1]
+
+    if (last !== undefined && last.lane === hit.call.lane) {
+      last.hits.push(hit)
+      last.to = hit.at + LEAVE_MS
+    } else {
+      visits.push({
+        lane: hit.call.lane,
+        hits: [hit],
+        from: Math.max(hit.at - ARRIVE_MS, last?.to ?? -Infinity),
+        to: hit.at + LEAVE_MS,
+      })
+    }
+  }
+  const busy = LANES.map(one => one.lane).filter(lane =>
+    state.calls.some(call => call.lane === lane && call.endedAt === undefined),
+  )
+
+  return { hits, visits, busy }
+}
+
+// With calls running in `count` holes Claude goes round them, two seconds at
+// each: `cy` brings Claude in at the start of a hole's turn and takes Claude
+// away at its end, and `fq` is that hole's mole flinching under the two taps.
+function round(count: number): string {
+  const whole = count * SLOT_MS
+  const at = (ms: number) => `${((ms / whole) * 100).toFixed(2)}%`
+  const away = '{opacity:0;transform:translateY(-36px)}'
+  const here = '{opacity:1;transform:translateY(0)}'
+  const flinch = [0, TAP_MS]
+    .map(
+      tap =>
+        `${at(tap + 430)}{transform:scaleY(1)}${at(tap + 490)}{transform:scaleY(.62)}` +
+        `${at(tap + 620)}{transform:scaleY(.8)}${at(tap + 800)}{transform:scaleY(1)}`,
+    )
+    .join('')
+
+  return (
+    `@keyframes cy${count}{0%${away}${at(180)}${here}${at(SLOT_MS - 160)}${here}${at(SLOT_MS)}${away}100%${away}}` +
+    `@keyframes fq${count}{0%{transform:scaleY(1)}${flinch}100%{transform:scaleY(1)}}`
+  )
+}
+
+function hole(index: number, state: Flow, now: number, stage: Stage): string {
   const { lane, color } = LANES[index] ?? LANES[0]!
   const [cx, top] = SPOTS[index] ?? SPOTS[0]!
-  const calls = state.calls.filter(call => call.lane === lane)
-  const running = calls
-    .filter(call => call.endedAt === undefined)
+  const running = state.calls
+    .filter(call => call.lane === lane && call.endedAt === undefined)
     .sort((a, b) => a.startedAt - b.startedAt)
-  // The whacks still playing, each with the moment it lands. Calls that
-  // ended together are spaced out, so each gets a whack that can be seen.
-  let previous = -Infinity
-  const hits = calls
-    .filter(call => call.endedAt !== undefined && hitAt(call) > now - FX_MS)
-    .sort((a, b) => hitAt(a) - hitAt(b))
+  // The whacks of this hole still playing.
+  const hits = stage.hits
+    .filter(hit => hit.call.lane === lane && hit.at > now - FX_MS)
     .slice(-4)
-    .map(call => {
-      previous = Math.max(hitAt(call), previous + HIT_GAP_MS)
-
-      return { call, at: previous }
-    })
   const landed = hits.filter(hit => hit.call.hasFailed !== true)
   const last = hits[hits.length - 1]
   const lastLanded = landed[landed.length - 1]
   const isRunning = running[0] !== undefined
   const spot = state.claude ?? { at: HOME, hopAt: 0 }
-  const isHere = spot.at === lane
   const delay = (at: number) => `${Math.round(at - now)}ms`
   // Where in its one-second beat a tap is, from the clock, so the tapping
   // does not start over each time the picture is drawn again.
   const beat = `-${now % TAP_MS}ms`
-  const isTapped = isRunning && isHere
+  // Claude's round of the holes with a call running, and this hole's turn.
+  const count = stage.busy.length
+  const whole = count * SLOT_MS
+  const turn = stage.busy.indexOf(lane)
+  const phase = `-${(((now - turn * SLOT_MS) % whole) + whole) % whole}ms`
 
   // The mole: up while a call runs and down after the last whack. A hole
   // nothing calls on stays empty: a mole that came up there would look like
@@ -1037,8 +1141,13 @@ function hole(index: number, state: Flow, now: number): string {
   } else {
     pop = 'transform:translateY(24px)'
   }
+  const flinch = !isRunning
+    ? []
+    : count === 1
+      ? [`sqt ${TAP_MS}ms linear ${beat} infinite`]
+      : [`fq${count} ${whole}ms linear ${phase} infinite`]
   const squash = [
-    ...(isTapped ? [`sqt ${TAP_MS}ms linear ${beat} infinite`] : []),
+    ...flinch,
     ...landed.map(hit => `sq .36s ease-out ${delay(hit.at)}`),
   ].join(',')
   const dizzy =
@@ -1057,63 +1166,122 @@ function hole(index: number, state: Flow, now: number): string {
     `<path fill="${color}" d="M55 20h17v14h-17z"/><path fill="${tint(color, 0.45)}" d="M55 20h17v2h-17z"/>` +
     px(icon, { w: '#ffffff' }, 59, 23 + Math.floor((8 - icon.length) / 2))
 
-  // Claude, where Claude is: tapping the mole while its call runs, bringing
-  // the mallet down hard when the call ends, and leaping between stumps.
-  const figure = (motion: string, isAtWork: boolean) => {
-    const swings = isAtWork
-      ? [
-          ...(isRunning ? [`tap ${TAP_MS}ms linear ${beat} infinite`] : []),
-          // Each swing starts early enough to land on its moment: the
-          // mallet is down 36% of the way through.
-          ...hits.map(
-            hit => `${isRunning ? 'sww' : 'swr'} .46s ease-in ${delay(hit.at - 166)}`,
-          ),
-        ].join(',')
-      : ''
-    const rest = isAtWork && isRunning ? -55 : -25
+  // Claude. `motion` is how Claude comes and goes, `swings` the whacks to
+  // land here, and `isTapping` whether a call is running under the mallet.
+  const figure = (motion: string, swings: Hit[], isTapping: boolean) => {
+    const mallet = [
+      ...(isTapping ? [`tap ${TAP_MS}ms linear ${beat} infinite`] : []),
+      // Each swing starts early enough to land on its moment: the mallet is
+      // down 36% of the way through.
+      ...swings.map(
+        hit => `${isTapping ? 'sww' : 'swr'} .46s ease-in ${delay(hit.at - 166)}`,
+      ),
+    ].join(',')
+    const missed = swings.filter(hit => hit.call.hasFailed === true).pop()
     // A miss leaves Claude with a drop of sweat.
     const sweat =
-      isAtWork && last !== undefined && last.call.hasFailed === true
-        ? `<g opacity="0" style="animation:dr .7s ease-in ${delay(last.at + 120)} both">${DROP}</g>`
-        : ''
+      missed === undefined
+        ? ''
+        : `<g opacity="0" style="animation:dr .7s ease-in ${delay(missed.at + 120)} both">${DROP}</g>`
+    // A tap makes a small flash where the mallet lands.
+    const flash = isTapping
+      ? `<g opacity="0" style="transform-origin:36px 28px;animation:tf ${TAP_MS}ms linear ${beat} infinite"><path fill="#fff3b0" d="M35 25h2v2h2v2h-2v2h-2v-2h-2v-2h2z"/></g>`
+      : ''
 
     // The mallet is drawn first, so at rest its handle passes behind the
     // crab, over the shoulder, and does not cross the face.
     return (
-      `<g style="${motion}"><g class="${isAtWork && isRunning ? 'rdy' : 'cb'}">` +
-      `<g style="transform-origin:20px 33px;transform:rotate(${rest}deg)${swings === '' ? '' : `;animation:${swings}`}">${MALLET}</g>` +
-      `${CLAUDE}<g class="bl">${BLINK}</g>${sweat}</g></g>`
+      `<g${motion === '' ? '' : ` style="${motion}"`}><g class="${isTapping ? 'rdy' : 'cb'}">` +
+      `<g style="transform-origin:20px 33px;transform:rotate(${isTapping ? -55 : -25}deg)${mallet === '' ? '' : `;animation:${mallet}`}">${MALLET}</g>` +
+      `${CLAUDE}<g class="bl">${BLINK}</g>${sweat}</g>${flash}</g>`
     )
   }
+  const lastVisit = stage.visits[stage.visits.length - 1]
+  // Claude stays on after the last whack to tap the one call still running,
+  // when it is in this hole.
+  const isKept = count === 1 && isRunning && lastVisit?.lane === lane
   let claude = ''
 
-  if (isHere) {
-    claude = figure(`animation:in .26s ease-out ${delay(spot.hopAt)} both`, true)
-  } else if (spot.from === lane && now - spot.hopAt < 400) {
-    claude = figure(`animation:out .2s ease-in ${delay(spot.hopAt)} both`, false)
+  for (const visit of stage.visits) {
+    if (visit.lane !== lane) continue
+    const isLast = visit === lastVisit
+    // Claude was here already, tapping the call that has just ended: no hop.
+    const wasHere =
+      stage.visits.every(one => one.lane === lane) &&
+      stage.busy.every(one => one === lane)
+    const moves = [
+      ...(wasHere ? [] : [`in .18s ease-out ${delay(visit.from)} both`]),
+      // Off to the next whack, or back to the calls still running.
+      ...(isLast && (count === 0 || isKept)
+        ? []
+        : [`out .14s ease-in ${delay(visit.to)} forwards`]),
+    ].join(',')
+
+    claude += figure(
+      moves === '' ? '' : `animation:${moves}`,
+      visit.hits,
+      isLast && isKept,
+    )
+  }
+  if (isRunning && !isKept) {
+    if (count === 1) {
+      // One call running: Claude stands by it and taps, after any whack
+      // elsewhere is done.
+      claude += figure(
+        `animation:in ${lastVisit === undefined ? '.26s' : '.18s'} ease-out ${delay(
+          lastVisit === undefined
+            ? spot.at === lane
+              ? spot.hopAt
+              : running[0]!.startedAt
+            : lastVisit.to + 40,
+        )} both`,
+        [],
+        true,
+      )
+    } else {
+      // Calls running in several holes: Claude goes round them.
+      const going = figure(
+        `animation:cy${count} ${whole}ms linear ${phase} infinite`,
+        [],
+        true,
+      )
+
+      claude +=
+        lastVisit === undefined
+          ? going
+          : `<g opacity="0" style="animation:on 1ms linear ${delay(lastVisit.to + 40)} forwards">${going}</g>`
+    }
+  } else if (count === 0 && lastVisit === undefined && spot.at === lane) {
+    // Nothing going on: Claude rests where the last call was.
+    claude = figure(`animation:in .26s ease-out ${delay(spot.hopAt)} both`, [], false)
+  } else if (
+    count < 2 &&
+    lastVisit === undefined &&
+    spot.at !== lane &&
+    spot.from === lane &&
+    now - spot.hopAt < 400
+  ) {
+    // Claude has just leapt from here to a call that began elsewhere.
+    claude = figure(`animation:out .2s ease-in ${delay(spot.hopAt)} both`, [], false)
   }
 
   // What each whack throws off: a flash, a coin, and the lane's own burst. A
-  // miss throws up only dust. A tap, while the call still runs, a small flash.
-  const effects =
-    (isTapped
-      ? `<g opacity="0" style="transform-origin:36px 28px;animation:tf ${TAP_MS}ms linear ${beat} infinite"><path fill="#fff3b0" d="M35 25h2v2h2v2h-2v2h-2v-2h-2v-2h2z"/></g>`
-      : '') +
-    hits
-      .map(hit => {
-        const at = Math.round(hit.at - now)
+  // miss throws up only dust.
+  const effects = hits
+    .map(hit => {
+      const at = Math.round(hit.at - now)
 
-        if (hit.call.hasFailed === true) {
-          return piece('s1 .6s', at, PUFF) + piece('s4 .6s', at, PUFF)
-        }
+      if (hit.call.hasFailed === true) {
+        return piece('s1 .6s', at, PUFF) + piece('s4 .6s', at, PUFF)
+      }
 
-        return (
-          piece('fl .28s', at, BURST, '36px 28px') +
-          burst(lane, at) +
-          piece('cn 1s', at, `<g class="cs" style="transform-origin:36px 20px">${COIN}</g>`)
-        )
-      })
-      .join('')
+      return (
+        piece('fl .28s', at, BURST, '36px 28px') +
+        burst(lane, at) +
+        piece('cn 1s', at, `<g class="cs" style="transform-origin:36px 20px">${COIN}</g>`)
+      )
+    })
+    .join('')
   const shake = landed
     .map(hit => `shk .2s steps(4) ${delay(hit.at)}`)
     .join(',')
@@ -1127,10 +1295,10 @@ function hole(index: number, state: Flow, now: number): string {
 // ---- The whole picture --------------------------------------------------------
 
 // Three whacks within four seconds bring confetti down over the field.
-function confetti(state: Flow, now: number): string {
-  const recent = state.calls
-    .filter(call => call.endedAt !== undefined && call.hasFailed !== true)
-    .map(hitAt)
+function confetti(stage: Stage, now: number): string {
+  const recent = stage.hits
+    .filter(hit => hit.call.hasFailed !== true)
+    .map(hit => hit.at)
     .filter(at => at > now - 4000)
 
   if (recent.length < 3) return ''
@@ -1151,6 +1319,7 @@ function confetti(state: Flow, now: number): string {
 
 export function scene(state: Flow, now: number, isNight = false): string {
   const [back, front] = isNight ? MEADOWS.night : MEADOWS.day
+  const stage = stageOf(state, now)
   const loops = LOOPS.map(
     ([name, animation, period, offset]) =>
       `${name}{animation:${animation};animation-delay:-${(now + offset) % period}ms}`,
@@ -1158,7 +1327,7 @@ export function scene(state: Flow, now: number, isNight = false): string {
 
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="100%" height="100%" preserveAspectRatio="none">` +
-    `<style>${KEYFRAMES}${loops}</style>${back}${clouds(now, isNight)}${front}` +
-    `${LANES.map((_, index) => hole(index, state, now)).join('')}${confetti(state, now)}</svg>`
+    `<style>${KEYFRAMES}${stage.busy.length > 1 ? round(stage.busy.length) : ''}${loops}</style>${back}${clouds(now, isNight)}${front}` +
+    `${LANES.map((_, index) => hole(index, state, now, stage)).join('')}${confetti(stage, now)}</svg>`
   )
 }
