@@ -1,0 +1,12 @@
+{
+  "name": "tool-flow",
+  "version": "0.2.0",
+  "description": "A pixel-art whack-a-mole game behind the conversation in the Claude desktop and mobile apps: one hole per kind of tool, a mole up while a call runs, and Claude's little crab taps it, then brings the mallet down when it ends",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "haozhanghz",
+    "url": "https://github.com/haozhanghz"
+  },
+  "repository": "https://github.com/haozhanghz/tool-flow",
+  "license": "MIT"
+}
