@@ -58,6 +58,8 @@ These come from the desktop app and a mod cannot change them:
 - That new-session page follows the app's own appearance setting. Night goes with a dark appearance and day with a light one.
 - Cloud sessions do not load the mod.
 - As a conversation grows, its text lies over the holes.
+- `/clear` takes the backdrop away until the next message is sent.
+- The mallet lands about a second after a call ends: the app draws a new picture only so often.
 - Checked in the macOS desktop app 5.11492.5 only.
 
 ## Uninstall

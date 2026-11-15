@@ -37,10 +37,10 @@ export const HOME: Lane = 'web'
 const POP_MS = 420
 // How long after a call ends the mallet lands, and at the least how long
 // after the picture is first drawn with the call ended. The app paints a new
-// picture about a quarter of a second after the call's end, so a whack timed
-// any closer began with the mallet already down and was never seen. This
+// picture up to half a second after the call's end, so a whack timed to the
+// end itself began with the mallet already down and was never seen. This
 // leaves time for Claude to hop over and swing.
-const HIT_LAG_MS = 600
+const HIT_LAG_MS = 450
 // Calls that end together are whacked one after another: this far apart in
 // one hole, and this far when Claude has to hop to another.
 const HIT_GAP_MS = 220
@@ -49,8 +49,10 @@ const HOP_GAP_MS = 660
 const BACKLOG_MS = 3000
 // Claude lands beside a mole this long before the mallet does, and stays
 // this long after.
-const ARRIVE_MS = 300
+const ARRIVE_MS = 260
 const LEAVE_MS = 300
+// Claude waits at a hole for another whack due there within this long.
+const STAY_MS = 1200
 // With calls running in several holes, Claude spends this long at each in
 // turn: two taps.
 const SLOT_MS = 2000
@@ -729,7 +731,7 @@ const KEYFRAMES =
   // ends with the mallet on the shoulder or raised again.
   '@keyframes in{0%{transform:translateY(-36px);opacity:0}70%{transform:translateY(2px);opacity:1}100%{transform:translateY(0);opacity:1}}' +
   '@keyframes out{0%{transform:translateY(0);opacity:1}100%{transform:translateY(-36px);opacity:0}}' +
-  '@keyframes on{to{opacity:1}}' +
+  '@keyframes on{to{opacity:1}}@keyframes off{to{opacity:0}}' +
   // The swing: down in the first third, held on the mole, then back.
   '@keyframes swr{0%{transform:rotate(-55deg)}36%,62%{transform:rotate(82deg)}100%{transform:rotate(-25deg)}}' +
   '@keyframes sww{0%{transform:rotate(-55deg)}36%,62%{transform:rotate(82deg)}100%{transform:rotate(-55deg)}}' +
@@ -1051,11 +1053,18 @@ function stageOf(state: Flow, now: number): Stage {
   hits.sort((a, b) => a.at - b.at)
   const visits: Visit[] = []
 
+  // Visits are made up from every whack still in the picture, not only those
+  // to come, so that a visit under way keeps its times when the picture is
+  // drawn again in the middle of it.
   for (const hit of hits) {
-    if (hit.at + LEAVE_MS <= now) continue
+    if (hit.at <= now - FX_MS) continue
     const last = visits[visits.length - 1]
 
-    if (last !== undefined && last.lane === hit.call.lane) {
+    if (
+      last !== undefined &&
+      last.lane === hit.call.lane &&
+      hit.at - ARRIVE_MS - last.to < STAY_MS
+    ) {
       last.hits.push(hit)
       last.to = hit.at + LEAVE_MS
     } else {
@@ -1071,7 +1080,7 @@ function stageOf(state: Flow, now: number): Stage {
     state.calls.some(call => call.lane === lane && call.endedAt === undefined),
   )
 
-  return { hits, visits, busy }
+  return { hits, visits: visits.filter(visit => visit.to > now), busy }
 }
 
 // With calls running in `count` holes Claude goes round them, two seconds at
@@ -1081,6 +1090,7 @@ function round(count: number): string {
   const whole = count * SLOT_MS
   const at = (ms: number) => `${((ms / whole) * 100).toFixed(2)}%`
   const away = '{opacity:0;transform:translateY(-36px)}'
+  const half = '{opacity:.5;transform:translateY(-16px)}'
   const here = '{opacity:1;transform:translateY(0)}'
   const flinch = [0, TAP_MS]
     .map(
@@ -1091,7 +1101,9 @@ function round(count: number): string {
     .join('')
 
   return (
-    `@keyframes cy${count}{0%${away}${at(180)}${here}${at(SLOT_MS - 160)}${here}${at(SLOT_MS)}${away}100%${away}}` +
+    // The hop in begins a little before the turn and the hop out ends with
+    // it, so Claude is leaving one hole while landing by the next.
+    `@keyframes cy${count}{0%${half}${at(110)}${here}${at(SLOT_MS - 120)}${here}${at(SLOT_MS)}${away}${at(whole - 80)}${away}100%${half}}` +
     `@keyframes fq${count}{0%{transform:scaleY(1)}${flinch}100%{transform:scaleY(1)}}`
   )
 }
@@ -1224,33 +1236,40 @@ function hole(index: number, state: Flow, now: number, stage: Stage): string {
     )
   }
   if (isRunning && !isKept) {
-    if (count === 1) {
-      // One call running: Claude stands by it and taps, after any whack
-      // elsewhere is done.
-      claude += figure(
-        `animation:in ${lastVisit === undefined ? '.26s' : '.18s'} ease-out ${delay(
-          lastVisit === undefined
-            ? spot.at === lane
-              ? spot.hopAt
-              : running[0]!.startedAt
-            : lastVisit.to + 40,
-        )} both`,
-        [],
-        true,
-      )
-    } else {
-      // Calls running in several holes: Claude goes round them.
-      const going = figure(
-        `animation:cy${count} ${whole}ms linear ${phase} infinite`,
-        [],
-        true,
-      )
+    // Between whacks Claude is with the calls still running: beside the one,
+    // or going round the several. `shown` hides that Claude for as long as
+    // each visit lasts.
+    const isAway = stage.visits[0] !== undefined && stage.visits[0].from + 40 <= now
+    const shown: string[] = []
+    let backAt = -Infinity
 
-      claude +=
-        lastVisit === undefined
-          ? going
-          : `<g opacity="0" style="animation:on 1ms linear ${delay(lastVisit.to + 40)} forwards">${going}</g>`
-    }
+    stage.visits.forEach((visit, at) => {
+      const next = stage.visits[at + 1]
+
+      // Gone only once Claude is landing by the whack, so there is no moment
+      // with Claude nowhere.
+      if (visit.from + 40 > now) shown.push(`off 1ms linear ${delay(visit.from + 40)} forwards`)
+      // Not worth coming back for less than 400 ms.
+      if (next === undefined || next.from - visit.to >= 400) {
+        backAt = visit.to - 60
+        shown.push(`on 1ms linear ${delay(backAt)} forwards`)
+      }
+    })
+    const going =
+      count === 1
+        ? figure(
+            lastVisit === undefined
+              ? `animation:in .26s ease-out ${delay(spot.at === lane ? spot.hopAt : running[0]!.startedAt)} both`
+              : `animation:in .18s ease-out ${delay(backAt)} forwards`,
+            [],
+            true,
+          )
+        : figure(`animation:cy${count} ${whole}ms linear ${phase} infinite`, [], true)
+
+    claude +=
+      shown.length === 0
+        ? going
+        : `<g style="opacity:${isAway ? 0 : 1};animation:${shown.join(',')}">${going}</g>`
   } else if (count === 0 && lastVisit === undefined && spot.at === lane) {
     // Nothing going on: Claude rests where the last call was.
     claude = figure(`animation:in .26s ease-out ${delay(spot.hopAt)} both`, [], false)

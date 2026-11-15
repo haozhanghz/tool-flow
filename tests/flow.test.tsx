@@ -66,18 +66,18 @@ test('a call pops its mole, and its end brings the mallet down', async ($, on) =
   await reading
   const hit = await drawn()
 
-  // The call has ended. The mallet lands 600 ms from now, so its swing, which
+  // The call has ended. The mallet lands 450 ms from now, so its swing, which
   // starts 166 ms before, is still to come and can be seen. With it come a
   // flash, a coin and sheets of paper, and then the mole goes down.
-  expect(hit).toContain('swr .46s ease-in 434ms')
-  expect(hit).toContain('animation:fl .28s ease-out 600ms both')
-  expect(hit).toContain(`${PAPER} 600ms both`)
-  expect(hit).toContain(`${COIN} 600ms both`)
-  expect(hit).toContain('dn .3s ease-in 900ms forwards')
+  expect(hit).toContain('swr .46s ease-in 284ms')
+  expect(hit).toContain('animation:fl .28s ease-out 450ms both')
+  expect(hit).toContain(`${PAPER} 450ms both`)
+  expect(hit).toContain(`${COIN} 450ms both`)
+  expect(hit).toContain('dn .3s ease-in 750ms forwards')
   // Drawn again a moment later, the whack has not moved: it lands when it
   // was first said to.
   await clock.advance(100)
-  expect(await drawn()).toContain('swr .46s ease-in 334ms')
+  expect(await drawn()).toContain('swr .46s ease-in 184ms')
   expect(hit.includes('animation:tap ')).toBe(false)
   expect(hit.includes('class="pg"')).toBe(false)
   // Reading throws off paper, and nothing that belongs to another kind of tool.
@@ -111,22 +111,22 @@ test('each kind of tool is whacked with an effect of its own', async ($, on) => 
   }
   const bash = await whacked({ tool: 'Bash', command: 'ls' })
 
-  // The mallet lands 600 ms after the picture is first drawn with the call
+  // The mallet lands 450 ms after the picture is first drawn with the call
   // ended, however short the call.
-  expect(bash).toContain(`${BOLT} 600ms both`)
-  expect(bash).toContain('swr .46s ease-in 434ms')
+  expect(bash).toContain(`${BOLT} 450ms both`)
+  expect(bash).toContain('swr .46s ease-in 284ms')
   expect(bash.includes(PAPER)).toBe(false)
 
   const web = await whacked({ tool: 'WebFetch', url: 'https://example.com', prompt: 'x' })
 
   // Three ripples, one after another.
-  expect(web).toContain(`${RIPPLE} 600ms both`)
-  expect(web).toContain(`${RIPPLE} 900ms both`)
+  expect(web).toContain(`${RIPPLE} 450ms both`)
+  expect(web).toContain(`${RIPPLE} 750ms both`)
   expect(web.includes(BOLT)).toBe(false)
 
   const agent = await whacked({ tool: 'Agent', description: 'x', prompt: 'y' })
 
-  expect(agent).toContain(`${STARS} 600ms both`)
+  expect(agent).toContain(`${STARS} 450ms both`)
   expect(agent.includes(RIPPLE)).toBe(false)
 })
 
@@ -140,11 +140,11 @@ test('a failed call is a miss: the mole ducks, taunts, and no coin is given', as
 
   expect(source.includes(COIN)).toBe(false)
   // Down 90 ms before the mallet lands, then up again with its tongue out.
-  expect(source).toContain('dn .2s ease-in 510ms forwards')
-  expect(source).toContain('up .2s ease-out 860ms forwards')
-  expect(source).toContain('animation:tg .85s linear 900ms')
+  expect(source).toContain('dn .2s ease-in 360ms forwards')
+  expect(source).toContain('up .2s ease-out 710ms forwards')
+  expect(source).toContain('animation:tg .85s linear 750ms')
   // And Claude is left with a drop of sweat.
-  expect(source).toContain('animation:dr .7s ease-in 720ms both')
+  expect(source).toContain('animation:dr .7s ease-in 570ms both')
   await ui.unmount()
 })
 
@@ -404,12 +404,12 @@ test('calls that end together in one hole are whacked one after another', async 
   const source = String((await ui.find({ type: 'Svg' }))?.props.source)
 
   // Three whacks, 220 ms apart, each with its own swing and its own coin.
-  for (const at of [600, 820, 1040]) {
+  for (const at of [450, 670, 890]) {
     expect(source).toContain(`swr .46s ease-in ${at - 166}ms`)
     expect(source).toContain(`${COIN} ${at}ms both`)
   }
   // The mole stays up until the last one has landed.
-  expect(source).toContain('dn .3s ease-in 1340ms forwards')
+  expect(source).toContain('dn .3s ease-in 1190ms forwards')
   await ui.unmount()
 })
 
@@ -479,21 +479,29 @@ test('with calls running in two holes, Claude goes round them and whacks each as
   await fetched
   const one = await drawn()
 
-  // The fetch has ended: Claude hops to it 300 ms before the mallet lands,
-  // leaves 300 ms after, and goes back to tap the command still running.
-  expect(one).toContain('animation:in .18s ease-out 300ms both,out .14s ease-in 900ms forwards')
-  expect(one).toContain('swr .46s ease-in 434ms')
-  expect(one).toContain(`${RIPPLE} 600ms both`)
-  expect(one).toContain('animation:in .18s ease-out 940ms both')
+  // The fetch has ended: Claude hops to it 260 ms before the mallet lands and
+  // leaves 300 ms after. The Claude beside the command still running is
+  // hidden for that long, and then comes back to tap.
+  expect(one).toContain('animation:in .18s ease-out 190ms both,out .14s ease-in 750ms forwards')
+  expect(one).toContain('swr .46s ease-in 284ms')
+  expect(one).toContain(`${RIPPLE} 450ms both`)
+  expect(one).toContain('opacity:1;animation:off 1ms linear 230ms forwards,on 1ms linear 690ms forwards')
+  expect(one).toContain('animation:in .18s ease-out 690ms forwards')
+  // Drawn again in the middle of the visit, nothing has moved.
+  await clock.advance(500)
+  const during = await drawn()
+
+  expect(during).toContain('animation:in .18s ease-out -310ms both,out .14s ease-in 250ms forwards')
+  expect(during).toContain('opacity:0;animation:on 1ms linear 190ms forwards')
   expect(one.includes('animation:cy2 ')).toBe(false)
 
-  await clock.advance(5000)
+  await clock.advance(4500)
   await slow
   const none = await drawn()
 
   // The command has ended with Claude beside it: no hop, only the swing.
-  expect(none).toContain('swr .46s ease-in 434ms')
-  expect(none).toContain(`${BOLT} 600ms both`)
+  expect(none).toContain('swr .46s ease-in 284ms')
+  expect(none).toContain(`${BOLT} 450ms both`)
   expect(none.includes('animation:in .18s')).toBe(false)
   expect(none.includes('animation:tap ')).toBe(false)
 })
