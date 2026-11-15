@@ -4,8 +4,6 @@ A mod for the Code tab of the Claude desktop app. It draws a pixel-art meadow be
 
 ![The demo game: moles come up for tool calls and the crab whacks them](docs/demo.gif)
 
-给 Claude 桌面端 Code 标签页用的一个 mod：对话后面是一片像素风草地，Claude 小螃蟹在上面打地鼠。每类工具一个地洞，工具调用开始时地鼠冒头，运行期间小螃蟹一下一下地敲，结束时一锤砸下去。中文回复用 `/tool-flow lang zh` 打开。
-
 ## Reading the game
 
 There are no words in the picture. A kind of tool is told by its mole's costume and by what flies out when it is whacked:
